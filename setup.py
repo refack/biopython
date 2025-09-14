@@ -117,6 +117,7 @@ class build_antlr(Command):
         ]
 
         try:
+            print(' '.join(command))
             subprocess.run(command, check=True)
         except FileNotFoundError:
             print("Could not run ANTLR4. Is Java installed and in your PATH?")
