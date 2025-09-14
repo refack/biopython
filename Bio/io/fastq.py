@@ -387,452 +387,12 @@ from .Interfaces import _get_seq_string
 from .Interfaces import _TextIOSource
 from .Interfaces import SequenceIterator
 from .Interfaces import SequenceWriter
-
-# define score offsets. See discussion for differences between Sanger and
-# Solexa offsets.
-SANGER_SCORE_OFFSET = 33
-SOLEXA_SCORE_OFFSET = 64
-INVALID_CHAR_CODE = 200
-INVALID_CHAR = bytes((INVALID_CHAR_CODE,))
-
-
-def solexa_quality_from_phred(phred_quality: float) -> float:
-    """Convert a PHRED quality (range 0 to about 90) to a Solexa quality.
-
-    PHRED and Solexa quality scores are both log transformations of a
-    probality of error (high score = low probability of error). This function
-    takes a PHRED score, transforms it back to a probability of error, and
-    then re-expresses it as a Solexa score. This assumes the error estimates
-    are equivalent.
-
-    How does this work exactly? Well the PHRED quality is minus ten times the
-    base ten logarithm of the probability of error::
-
-        phred_quality = -10*log(error,10)
-
-    Therefore, turning this round::
-
-        error = 10 ** (- phred_quality / 10)
-
-    Now, Solexa qualities use a different log transformation::
-
-        solexa_quality = -10*log(error/(1-error),10)
-
-    After substitution and a little manipulation we get::
-
-         solexa_quality = 10*log(10**(phred_quality/10.0) - 1, 10)
-
-    However, real Solexa files use a minimum quality of -5. This does have a
-    good reason - a random base call would be correct 25% of the time,
-    and thus have a probability of error of 0.75, which gives 1.25 as the PHRED
-    quality, or -4.77 as the Solexa quality. Thus (after rounding), a random
-    nucleotide read would have a PHRED quality of 1, or a Solexa quality of -5.
-
-    Taken literally, this logarithic formula would map a PHRED quality of zero
-    to a Solexa quality of minus infinity. Of course, taken literally, a PHRED
-    score of zero means a probability of error of one (i.e. the base call is
-    definitely wrong), which is worse than random! In practice, a PHRED quality
-    of zero usually means a default value, or perhaps random - and therefore
-    mapping it to the minimum Solexa score of -5 is reasonable.
-
-    In conclusion, we follow EMBOSS, and take this logarithmic formula but also
-    apply a minimum value of -5.0 for the Solexa quality, and also map a PHRED
-    quality of zero to -5.0 as well.
-
-    Note this function will return a floating point number, it is up to you to
-    round this to the nearest integer if appropriate.  e.g.
-
-    >>> print("%0.2f" % round(solexa_quality_from_phred(80), 2))
-    80.00
-    >>> print("%0.2f" % round(solexa_quality_from_phred(50), 2))
-    50.00
-    >>> print("%0.2f" % round(solexa_quality_from_phred(20), 2))
-    19.96
-    >>> print("%0.2f" % round(solexa_quality_from_phred(10), 2))
-    9.54
-    >>> print("%0.2f" % round(solexa_quality_from_phred(5), 2))
-    3.35
-    >>> print("%0.2f" % round(solexa_quality_from_phred(4), 2))
-    1.80
-    >>> print("%0.2f" % round(solexa_quality_from_phred(3), 2))
-    -0.02
-    >>> print("%0.2f" % round(solexa_quality_from_phred(2), 2))
-    -2.33
-    >>> print("%0.2f" % round(solexa_quality_from_phred(1), 2))
-    -5.00
-    >>> print("%0.2f" % round(solexa_quality_from_phred(0), 2))
-    -5.00
-
-    Notice that for high quality reads PHRED and Solexa scores are numerically
-    equal. The differences are important for poor quality reads, where PHRED
-    has a minimum of zero but Solexa scores can be negative.
-
-    Finally, as a special case where None is used for a "missing value", None
-    is returned:
-
-    >>> print(solexa_quality_from_phred(None))
-    None
-    """
-    if phred_quality is None:
-        # Assume None is used as some kind of NULL or NA value; return None
-        # e.g. Bio.SeqIO gives Ace contig gaps a quality of None.
-        return None
-    elif phred_quality > 0:
-        # Solexa uses a minimum value of -5, which after rounding matches a
-        # random nucleotide base call.
-        return max(-5.0, 10 * log(10 ** (phred_quality / 10.0) - 1, 10))
-    elif phred_quality == 0:
-        # Special case, map to -5 as discussed in the docstring
-        return -5.0
-    else:
-        raise ValueError(
-            f"PHRED qualities must be positive (or zero), not {phred_quality!r}"
-        )
-
-
-def phred_quality_from_solexa(solexa_quality: float) -> float:
-    """Convert a Solexa quality (which can be negative) to a PHRED quality.
-
-    PHRED and Solexa quality scores are both log transformations of a
-    probality of error (high score = low probability of error). This function
-    takes a Solexa score, transforms it back to a probability of error, and
-    then re-expresses it as a PHRED score. This assumes the error estimates
-    are equivalent.
-
-    The underlying formulas are given in the documentation for the sister
-    function solexa_quality_from_phred, in this case the operation is::
-
-        phred_quality = 10*log(10**(solexa_quality/10.0) + 1, 10)
-
-    This will return a floating point number, it is up to you to round this to
-    the nearest integer if appropriate.  e.g.
-
-    >>> print("%0.2f" % round(phred_quality_from_solexa(80), 2))
-    80.00
-    >>> print("%0.2f" % round(phred_quality_from_solexa(20), 2))
-    20.04
-    >>> print("%0.2f" % round(phred_quality_from_solexa(10), 2))
-    10.41
-    >>> print("%0.2f" % round(phred_quality_from_solexa(0), 2))
-    3.01
-    >>> print("%0.2f" % round(phred_quality_from_solexa(-5), 2))
-    1.19
-
-    Note that a solexa_quality less then -5 is not expected, will trigger a
-    warning, but will still be converted as per the logarithmic mapping
-    (giving a number between 0 and 1.19 back).
-
-    As a special case where None is used for a "missing value", None is
-    returned:
-
-    >>> print(phred_quality_from_solexa(None))
-    None
-    """
-    if solexa_quality is None:
-        # Assume None is used as some kind of NULL or NA value; return None
-        return None
-    if solexa_quality < -5:
-        warnings.warn(
-            f"Solexa quality less than -5 passed, {solexa_quality!r}", BiopythonWarning
-        )
-    return 10 * log(10 ** (solexa_quality / 10.0) + 1, 10)
-
-
-def _get_phred_quality(record: SeqRecord) -> list[float] | list[int]:
-    """Extract PHRED qualities from a SeqRecord's letter_annotations (PRIVATE).
-
-    If there are no PHRED qualities, but there are Solexa qualities, those are
-    used instead after conversion.
-    """
-    try:
-        return record.letter_annotations["phred_quality"]  # type: ignore
-    except KeyError:
-        pass
-    try:
-        return [
-            phred_quality_from_solexa(q)
-            for q in record.letter_annotations["solexa_quality"]
-        ]
-    except KeyError:
-        raise ValueError(
-            "No suitable quality scores found in "
-            "letter_annotations of SeqRecord (id=%s)." % record.id
-        ) from None
-
-
-# Only map 0 to 93, we need to give a warning on truncating at 93
-_phred_to_sanger_quality_str = {
-    qp: chr(min(126, qp + SANGER_SCORE_OFFSET)) for qp in range(93 + 1)
-}
-# Only map -5 to 93, we need to give a warning on truncating at 93
-_solexa_to_sanger_quality_str = {
-    qs: chr(min(126, int(round(phred_quality_from_solexa(qs)) + SANGER_SCORE_OFFSET)))
-    for qs in range(-5, 93 + 1)
-}
-
-
-def _get_sanger_quality_str(record: SeqRecord) -> str:
-    """Return a Sanger FASTQ encoded quality string (PRIVATE).
-
-    >>> from Bio.Seq import Seq
-    >>> from Bio.SeqRecord import SeqRecord
-    >>> r = SeqRecord(Seq("ACGTAN"), id="Test",
-    ...               letter_annotations = {"phred_quality":[50, 40, 30, 20, 10, 0]})
-    >>> _get_sanger_quality_str(r)
-    'SI?5+!'
-
-    If as in the above example (or indeed a SeqRecord parser with Bio.SeqIO),
-    the PHRED qualities are integers, this function is able to use a very fast
-    pre-cached mapping. However, if they are floats which differ slightly, then
-    it has to do the appropriate rounding - which is slower:
-
-    >>> r2 = SeqRecord(Seq("ACGTAN"), id="Test2",
-    ...      letter_annotations = {"phred_quality":[50.0, 40.05, 29.99, 20, 9.55, 0.01]})
-    >>> _get_sanger_quality_str(r2)
-    'SI?5+!'
-
-    If your scores include a None value, this raises an exception:
-
-    >>> r3 = SeqRecord(Seq("ACGTAN"), id="Test3",
-    ...               letter_annotations = {"phred_quality":[50, 40, 30, 20, 10, None]})
-    >>> _get_sanger_quality_str(r3)
-    Traceback (most recent call last):
-       ...
-    TypeError: A quality value of None was found
-
-    If (strangely) your record has both PHRED and Solexa scores, then the PHRED
-    scores are used in preference:
-
-    >>> r4 = SeqRecord(Seq("ACGTAN"), id="Test4",
-    ...               letter_annotations = {"phred_quality":[50, 40, 30, 20, 10, 0],
-    ...                                     "solexa_quality":[-5, -4, 0, None, 0, 40]})
-    >>> _get_sanger_quality_str(r4)
-    'SI?5+!'
-
-    If there are no PHRED scores, but there are Solexa scores, these are used
-    instead (after the appropriate conversion):
-
-    >>> r5 = SeqRecord(Seq("ACGTAN"), id="Test5",
-    ...      letter_annotations = {"solexa_quality":[40, 30, 20, 10, 0, -5]})
-    >>> _get_sanger_quality_str(r5)
-    'I?5+$"'
-
-    Again, integer Solexa scores can be looked up in a pre-cached mapping making
-    this very fast. You can still use approximate floating point scores:
-
-    >>> r6 = SeqRecord(Seq("ACGTAN"), id="Test6",
-    ...      letter_annotations = {"solexa_quality":[40.1, 29.7, 20.01, 10, 0.0, -4.9]})
-    >>> _get_sanger_quality_str(r6)
-    'I?5+$"'
-
-    Notice that due to the limited range of printable ASCII characters, a
-    PHRED quality of 93 is the maximum that can be held in an Illumina FASTQ
-    file (using ASCII 126, the tilde). This function will issue a warning
-    in this situation.
-    """
-    # TODO - This functions works and is fast, but it is also ugly
-    # and there is considerable repetition of code for the other
-    # two FASTQ variants.
-    try:
-        # These take priority (in case both Solexa and PHRED scores found)
-        qualities = record.letter_annotations["phred_quality"]
-    except KeyError:
-        # Fall back on solexa scores...
-        pass
-    else:
-        # Try and use the precomputed mapping:
-        try:
-            return "".join(_phred_to_sanger_quality_str[qp] for qp in qualities)
-        except KeyError:
-            # Could be a float, or a None in the list, or a high value.
-            pass
-        if None in qualities:
-            raise TypeError("A quality value of None was found")
-        if max(qualities) >= 93.5:
-            warnings.warn(
-                "Data loss - max PHRED quality 93 in Sanger FASTQ", BiopythonWarning
-            )
-        # This will apply the truncation at 93, giving max ASCII 126
-        return "".join(
-            chr(min(126, int(round(qp)) + SANGER_SCORE_OFFSET)) for qp in qualities
-        )
-    # Fall back on the Solexa scores...
-    try:
-        qualities = record.letter_annotations["solexa_quality"]
-    except KeyError:
-        raise ValueError(
-            "No suitable quality scores found in "
-            "letter_annotations of SeqRecord (id=%s)." % record.id
-        ) from None
-    # Try and use the precomputed mapping:
-    try:
-        return "".join(_solexa_to_sanger_quality_str[qs] for qs in qualities)
-    except KeyError:
-        # Either no PHRED scores, or something odd like a float or None
-        pass
-    if None in qualities:
-        raise TypeError("A quality value of None was found")
-    # Must do this the slow way, first converting the PHRED scores into
-    # Solexa scores:
-    if max(qualities) >= 93.5:
-        warnings.warn(
-            "Data loss - max PHRED quality 93 in Sanger FASTQ", BiopythonWarning
-        )
-    # This will apply the truncation at 93, giving max ASCII 126
-    return "".join(
-        chr(min(126, int(round(phred_quality_from_solexa(qs))) + SANGER_SCORE_OFFSET))
-        for qs in qualities
-    )
-
-
-# Only map 0 to 62, we need to give a warning on truncating at 62
-assert 62 + SOLEXA_SCORE_OFFSET == 126
-_phred_to_illumina_quality_str = {
-    qp: chr(qp + SOLEXA_SCORE_OFFSET) for qp in range(62 + 1)
-}
-# Only map -5 to 62, we need to give a warning on truncating at 62
-_solexa_to_illumina_quality_str = {
-    qs: chr(int(round(phred_quality_from_solexa(qs))) + SOLEXA_SCORE_OFFSET)
-    for qs in range(-5, 62 + 1)
-}
-
-
-def _get_illumina_quality_str(record: SeqRecord) -> str:
-    """Return an Illumina 1.3 to 1.7 FASTQ encoded quality string (PRIVATE).
-
-    Notice that due to the limited range of printable ASCII characters, a
-    PHRED quality of 62 is the maximum that can be held in an Illumina FASTQ
-    file (using ASCII 126, the tilde). This function will issue a warning
-    in this situation.
-    """
-    # TODO - This functions works and is fast, but it is also ugly
-    # and there is considerable repetition of code for the other
-    # two FASTQ variants.
-    try:
-        # These take priority (in case both Solexa and PHRED scores found)
-        qualities = record.letter_annotations["phred_quality"]
-    except KeyError:
-        # Fall back on solexa scores...
-        pass
-    else:
-        # Try and use the precomputed mapping:
-        try:
-            return "".join(_phred_to_illumina_quality_str[qp] for qp in qualities)
-        except KeyError:
-            # Could be a float, or a None in the list, or a high value.
-            pass
-        if None in qualities:
-            raise TypeError("A quality value of None was found")
-        if max(qualities) >= 62.5:
-            warnings.warn(
-                "Data loss - max PHRED quality 62 in Illumina FASTQ", BiopythonWarning
-            )
-        # This will apply the truncation at 62, giving max ASCII 126
-        return "".join(
-            chr(min(126, int(round(qp)) + SOLEXA_SCORE_OFFSET)) for qp in qualities
-        )
-    # Fall back on the Solexa scores...
-    try:
-        qualities = record.letter_annotations["solexa_quality"]
-    except KeyError:
-        raise ValueError(
-            "No suitable quality scores found in "
-            "letter_annotations of SeqRecord (id=%s)." % record.id
-        ) from None
-    # Try and use the precomputed mapping:
-    try:
-        return "".join(_solexa_to_illumina_quality_str[qs] for qs in qualities)
-    except KeyError:
-        # Either no PHRED scores, or something odd like a float or None
-        pass
-    if None in qualities:
-        raise TypeError("A quality value of None was found")
-    # Must do this the slow way, first converting the PHRED scores into
-    # Solexa scores:
-    if max(qualities) >= 62.5:
-        warnings.warn(
-            "Data loss - max PHRED quality 62 in Illumina FASTQ", BiopythonWarning
-        )
-    # This will apply the truncation at 62, giving max ASCII 126
-    return "".join(
-        chr(min(126, int(round(phred_quality_from_solexa(qs))) + SOLEXA_SCORE_OFFSET))
-        for qs in qualities
-    )
-
-
-# Only map 0 to 62, we need to give a warning on truncating at 62
-assert 62 + SOLEXA_SCORE_OFFSET == 126
-_solexa_to_solexa_quality_str = {
-    qs: chr(min(126, qs + SOLEXA_SCORE_OFFSET)) for qs in range(-5, 62 + 1)
-}
-# Only map -5 to 62, we need to give a warning on truncating at 62
-_phred_to_solexa_quality_str = {
-    qp: chr(min(126, int(round(solexa_quality_from_phred(qp))) + SOLEXA_SCORE_OFFSET))
-    for qp in range(62 + 1)
-}
-
-
-def _get_solexa_quality_str(record: SeqRecord) -> str:
-    """Return a Solexa FASTQ encoded quality string (PRIVATE).
-
-    Notice that due to the limited range of printable ASCII characters, a
-    Solexa quality of 62 is the maximum that can be held in a Solexa FASTQ
-    file (using ASCII 126, the tilde). This function will issue a warning
-    in this situation.
-    """
-    # TODO - This functions works and is fast, but it is also ugly
-    # and there is considerable repetition of code for the other
-    # two FASTQ variants.
-    try:
-        # These take priority (in case both Solexa and PHRED scores found)
-        qualities = record.letter_annotations["solexa_quality"]
-    except KeyError:
-        # Fall back on PHRED scores...
-        pass
-    else:
-        # Try and use the precomputed mapping:
-        try:
-            return "".join(_solexa_to_solexa_quality_str[qs] for qs in qualities)
-        except KeyError:
-            # Could be a float, or a None in the list, or a high value.
-            pass
-        if None in qualities:
-            raise TypeError("A quality value of None was found")
-        if max(qualities) >= 62.5:
-            warnings.warn(
-                "Data loss - max Solexa quality 62 in Solexa FASTQ", BiopythonWarning
-            )
-        # This will apply the truncation at 62, giving max ASCII 126
-        return "".join(
-            chr(min(126, int(round(qs)) + SOLEXA_SCORE_OFFSET)) for qs in qualities
-        )
-    # Fall back on the PHRED scores...
-    try:
-        qualities = record.letter_annotations["phred_quality"]
-    except KeyError:
-        raise ValueError(
-            "No suitable quality scores found in "
-            "letter_annotations of SeqRecord (id=%s)." % record.id
-        ) from None
-    # Try and use the precomputed mapping:
-    try:
-        return "".join(_phred_to_solexa_quality_str[qp] for qp in qualities)
-    except KeyError:
-        # Either no PHRED scores, or something odd like a float or None
-        # or too big to be in the cache
-        pass
-    if None in qualities:
-        raise TypeError("A quality value of None was found")
-    # Must do this the slow way, first converting the PHRED scores into
-    # Solexa scores:
-    if max(qualities) >= 62.5:
-        warnings.warn(
-            "Data loss - max Solexa quality 62 in Solexa FASTQ", BiopythonWarning
-        )
-    return "".join(
-        chr(min(126, int(round(solexa_quality_from_phred(qp))) + SOLEXA_SCORE_OFFSET))
-        for qp in qualities
-    )
+from .qual import _get_phred_quality
+from .qual import _get_sanger_quality_str
+from .qual import _get_illumina_quality_str
+from .qual import _get_solexa_quality_str
+from .qual import SANGER_SCORE_OFFSET
+from .qual import SOLEXA_SCORE_OFFSET
 
 
 # TODO - Default to nucleotide or even DNA?
@@ -1127,333 +687,6 @@ class FastqIteratorAbstractBaseClass(SequenceIterator[str]):
         return record
 
 
-class FastqPhredIterator(FastqIteratorAbstractBaseClass):
-    """Parser for FASTQ files."""
-
-    assert SANGER_SCORE_OFFSET == ord("!")
-    # Originally, I used a list expression for each record:
-    #
-    # qualities = [ord(letter)-SANGER_SCORE_OFFSET for letter in quality_string]
-    #
-    # Precomputing is faster, perhaps partly by avoiding the subtractions.
-    q_mapping = bytes(
-        (
-            letter - SANGER_SCORE_OFFSET
-            if SANGER_SCORE_OFFSET <= letter < 94 + SANGER_SCORE_OFFSET
-            else INVALID_CHAR_CODE
-        )
-        for letter in range(256)
-    )
-
-    q_key = "phred_quality"
-
-    def __init__(
-        self,
-        source: _TextIOSource,
-        alphabet: None = None,
-    ):
-        """Iterate over FASTQ records as SeqRecord objects.
-
-        Arguments:
-         - source - input stream opened in text mode, or a path to a file
-         - alphabet - optional alphabet, no longer used. Leave as None.
-
-        For each sequence in a (Sanger style) FASTQ file there is a matching string
-        encoding the PHRED qualities (integers between 0 and about 90) using ASCII
-        values with an offset of 33.
-
-        For example, consider a file containing three short reads::
-
-            @EAS54_6_R1_2_1_413_324
-            CCCTTCTTGTCTTCAGCGTTTCTCC
-            +
-            ;;3;;;;;;;;;;;;7;;;;;;;88
-            @EAS54_6_R1_2_1_540_792
-            TTGGCAGGCCAAGGCCGATGGATCA
-            +
-            ;;;;;;;;;;;7;;;;;-;;;3;83
-            @EAS54_6_R1_2_1_443_348
-            GTTGCTTCTGGCGTGGGTGGGGGGG
-            +
-            ;;;;;;;;;;;9;7;;.7;393333
-
-        For each sequence (e.g. "CCCTTCTTGTCTTCAGCGTTTCTCC") there is a matching
-        string encoding the PHRED qualities using a ASCII values with an offset of
-        33 (e.g. ";;3;;;;;;;;;;;;7;;;;;;;88").
-
-        Using this module directly you might run:
-
-        >>> with open("Quality/example.fastq") as handle:
-        ...     for record in FastqPhredIterator(handle):
-        ...         print("%s %s" % (record.id, record.seq))
-        EAS54_6_R1_2_1_413_324 CCCTTCTTGTCTTCAGCGTTTCTCC
-        EAS54_6_R1_2_1_540_792 TTGGCAGGCCAAGGCCGATGGATCA
-        EAS54_6_R1_2_1_443_348 GTTGCTTCTGGCGTGGGTGGGGGGG
-
-        Typically however, you would call this via Bio.SeqIO instead with "fastq"
-        (or "fastq-sanger") as the format:
-
-        >>> from Bio import SeqIO
-        >>> with open("Quality/example.fastq") as handle:
-        ...     for record in SeqIO.parse(handle, "fastq"):
-        ...         print("%s %s" % (record.id, record.seq))
-        EAS54_6_R1_2_1_413_324 CCCTTCTTGTCTTCAGCGTTTCTCC
-        EAS54_6_R1_2_1_540_792 TTGGCAGGCCAAGGCCGATGGATCA
-        EAS54_6_R1_2_1_443_348 GTTGCTTCTGGCGTGGGTGGGGGGG
-
-        If you want to look at the qualities, they are record in each record's
-        per-letter-annotation dictionary as a simple list of integers:
-
-        >>> print(record.letter_annotations["phred_quality"])
-        [26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 26, 24, 26, 22, 26, 26, 13, 22, 26, 18, 24, 18, 18, 18, 18]
-
-        To modify the records returned by the parser, you can use a generator
-        function. For example, to store the mean PHRED quality in the record
-        description, use
-
-        >>> from statistics import mean
-        >>> def modify_records(records):
-        ...     for record in records:
-        ...         record.description = mean(record.letter_annotations['phred_quality'])
-        ...         yield record
-        ...
-        >>> with open('Quality/example.fastq') as handle:
-        ...     for record in modify_records(FastqPhredIterator(handle)):
-        ...         print(record.id, record.description)
-        ...
-        EAS54_6_R1_2_1_413_324 25.28
-        EAS54_6_R1_2_1_540_792 24.52
-        EAS54_6_R1_2_1_443_348 23.4
-
-        """
-        if alphabet is not None:
-            raise ValueError("The alphabet argument is no longer supported")
-        super().__init__(source)
-
-
-class FastqSolexaIterator(FastqIteratorAbstractBaseClass):
-    """Parser for old Solexa/Illumina FASTQ like files.
-
-    These files differ in the quality mapping.
-    """
-
-    # For negative numbers, will need to interpret as a signed integer byte
-    q_mapping = bytes(
-        (
-            (letter - SOLEXA_SCORE_OFFSET) % 256
-            if SOLEXA_SCORE_OFFSET - 5 <= letter < 63 + SOLEXA_SCORE_OFFSET
-            else INVALID_CHAR_CODE
-        )
-        for letter in range(256)
-    )
-
-    q_key = "solexa_quality"
-
-    def __init__(
-        self,
-        source: _TextIOSource,
-        alphabet: None = None,
-    ):
-        r"""Iterate over FASTQ records as SeqRecord objects.
-
-        Arguments:
-         - source - input stream opened in text mode, or a path to a file
-         - alphabet - optional alphabet, no longer used. Leave as None.
-
-        For each sequence in Solexa/Illumina FASTQ files there is a matching
-        string encoding the Solexa integer qualities using ASCII values with an
-        offset of 64.  Solexa scores are scaled differently to PHRED scores,
-        and Biopython will NOT perform any automatic conversion when loading.
-
-        NOTE - This file format is used by the OLD versions of the Solexa/
-        Illumina pipeline. See also the FastqIlluminaIterator function for the
-        NEW version.
-
-        For example, consider a file containing these five records::
-
-         @SLXA-B3_649_FC8437_R1_1_1_610_79
-         GATGTGCAATACCTTTGTAGAGGAA
-         +SLXA-B3_649_FC8437_R1_1_1_610_79
-         YYYYYYYYYYYYYYYYYYWYWYYSU
-         @SLXA-B3_649_FC8437_R1_1_1_397_389
-         GGTTTGAGAAAGAGAAATGAGATAA
-         +SLXA-B3_649_FC8437_R1_1_1_397_389
-         YYYYYYYYYWYYYYWWYYYWYWYWW
-         @SLXA-B3_649_FC8437_R1_1_1_850_123
-         GAGGGTGTTGATCATGATGATGGCG
-         +SLXA-B3_649_FC8437_R1_1_1_850_123
-         YYYYYYYYYYYYYWYYWYYSYYYSY
-         @SLXA-B3_649_FC8437_R1_1_1_362_549
-         GGAAACAAAGTTTTTCTCAACATAG
-         +SLXA-B3_649_FC8437_R1_1_1_362_549
-         YYYYYYYYYYYYYYYYYYWWWWYWY
-         @SLXA-B3_649_FC8437_R1_1_1_183_714
-         GTATTATTTAATGGCATACACTCAA
-         +SLXA-B3_649_FC8437_R1_1_1_183_714
-         YYYYYYYYYYWYYYYWYWWUWWWQQ
-
-        Using this module directly you might run:
-
-        >>> with open("Quality/solexa_example.fastq") as handle:
-        ...     for record in FastqSolexaIterator(handle):
-        ...         print("%s %s" % (record.id, record.seq))
-        SLXA-B3_649_FC8437_R1_1_1_610_79 GATGTGCAATACCTTTGTAGAGGAA
-        SLXA-B3_649_FC8437_R1_1_1_397_389 GGTTTGAGAAAGAGAAATGAGATAA
-        SLXA-B3_649_FC8437_R1_1_1_850_123 GAGGGTGTTGATCATGATGATGGCG
-        SLXA-B3_649_FC8437_R1_1_1_362_549 GGAAACAAAGTTTTTCTCAACATAG
-        SLXA-B3_649_FC8437_R1_1_1_183_714 GTATTATTTAATGGCATACACTCAA
-
-        Typically however, you would call this via Bio.SeqIO instead with
-        "fastq-solexa" as the format:
-
-        >>> from Bio import SeqIO
-        >>> with open("Quality/solexa_example.fastq") as handle:
-        ...     for record in SeqIO.parse(handle, "fastq-solexa"):
-        ...         print("%s %s" % (record.id, record.seq))
-        SLXA-B3_649_FC8437_R1_1_1_610_79 GATGTGCAATACCTTTGTAGAGGAA
-        SLXA-B3_649_FC8437_R1_1_1_397_389 GGTTTGAGAAAGAGAAATGAGATAA
-        SLXA-B3_649_FC8437_R1_1_1_850_123 GAGGGTGTTGATCATGATGATGGCG
-        SLXA-B3_649_FC8437_R1_1_1_362_549 GGAAACAAAGTTTTTCTCAACATAG
-        SLXA-B3_649_FC8437_R1_1_1_183_714 GTATTATTTAATGGCATACACTCAA
-
-        The qualities are recorded in each record's per-letter-annotation
-        dictionary as a simple list of integers:
-
-        >>> print(record.letter_annotations["solexa_quality"])
-        [25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 23, 25, 25, 25, 25, 23, 25, 23, 23, 21, 23, 23, 23, 17, 17]
-
-        These scores aren't very good, but they are high enough that they map
-        almost exactly onto PHRED scores:
-
-        >>> print("%0.2f" % phred_quality_from_solexa(25))
-        25.01
-
-        Let's look at faked example read which is even worse, where there are
-        more noticeable differences between the Solexa and PHRED scores::
-
-         @slxa_0001_1_0001_01
-         ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTNNNNNN
-         +slxa_0001_1_0001_01
-         hgfedcba`_^]\[ZYXWVUTSRQPONMLKJIHGFEDCBA@?>=<;
-
-        Again, you would typically use Bio.SeqIO to read this file in (rather
-        than calling the Bio.SeqIO.QualtityIO module directly).  Most FASTQ
-        files will contain thousands of reads, so you would normally use
-        Bio.SeqIO.parse() as shown above.  This example has only as one entry,
-        so instead we can use the Bio.SeqIO.read() function:
-
-        >>> from Bio import SeqIO
-        >>> with open("Quality/solexa_faked.fastq") as handle:
-        ...     record = SeqIO.read(handle, "fastq-solexa")
-        >>> print("%s %s" % (record.id, record.seq))
-        slxa_0001_1_0001_01 ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTNNNNNN
-        >>> print(record.letter_annotations["solexa_quality"])
-        [40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5]
-
-        These quality scores are so low that when converted from the Solexa
-        scheme into PHRED scores they look quite different:
-
-        >>> print("%0.2f" % phred_quality_from_solexa(-1))
-        2.54
-        >>> print("%0.2f" % phred_quality_from_solexa(-5))
-        1.19
-
-        Note you can use the Bio.SeqIO.write() function or the SeqRecord's
-        format method to output the record(s):
-
-        >>> print(record.format("fastq-solexa"))
-        @slxa_0001_1_0001_01
-        ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTNNNNNN
-        +
-        hgfedcba`_^]\[ZYXWVUTSRQPONMLKJIHGFEDCBA@?>=<;
-        <BLANKLINE>
-
-        Note this output is slightly different from the input file as Biopython
-        has left out the optional repetition of the sequence identifier on the
-        "+" line.  If you want the to use PHRED scores, use "fastq" or "qual"
-        as the output format instead, and Biopython will do the conversion for
-        you:
-
-        >>> print(record.format("fastq"))
-        @slxa_0001_1_0001_01
-        ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTNNNNNN
-        +
-        IHGFEDCBA@?>=<;:9876543210/.-,++*)('&&%%$$##""
-        <BLANKLINE>
-
-        >>> print(record.format("qual"))
-        >slxa_0001_1_0001_01
-        40 39 38 37 36 35 34 33 32 31 30 29 28 27 26 25 24 23 22 21
-        20 19 18 17 16 15 14 13 12 11 10 10 9 8 7 6 5 5 4 4 3 3 2 2
-        1 1
-        <BLANKLINE>
-
-        As shown above, the poor quality Solexa reads have been mapped to the
-        equivalent PHRED score (e.g. -5 to 1 as shown earlier).
-        """
-        if alphabet is not None:
-            raise ValueError("The alphabet argument is no longer supported")
-        super().__init__(source)
-
-
-class FastqIlluminaIterator(FastqIteratorAbstractBaseClass):
-    """Parser for Illumina 1.3 to 1.7 FASTQ like files.
-
-    These files differ in the quality mapping.
-    """
-
-    q_mapping = bytes(
-        (
-            letter - SOLEXA_SCORE_OFFSET
-            if SOLEXA_SCORE_OFFSET <= letter < 63 + SOLEXA_SCORE_OFFSET
-            else INVALID_CHAR_CODE
-        )
-        for letter in range(256)
-    )
-
-    q_key = "phred_quality"
-
-    def __init__(
-        self,
-        source: _TextIOSource,
-        alphabet: None = None,
-    ):
-        """Iterate over FASTQ records as SeqRecord objects.
-
-        Arguments:
-         - source - input stream opened in text mode, or a path to a file
-         - alphabet - optional alphabet, no longer used. Leave as None.
-
-        For each sequence in Illumina 1.3+ FASTQ files there is a matching
-        string encoding PHRED integer qualities using ASCII values with an
-        offset of 64.
-
-        >>> from Bio import SeqIO
-        >>> record = SeqIO.read("Quality/illumina_faked.fastq", "fastq-illumina")
-        >>> print("%s %s" % (record.id, record.seq))
-        Test ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTN
-        >>> max(record.letter_annotations["phred_quality"])
-        40
-        >>> min(record.letter_annotations["phred_quality"])
-        0
-
-        NOTE - Older versions of the Solexa/Illumina pipeline encoded Solexa
-        scores with an ASCII offset of 64. They are approximately equal but
-        only for high quality reads. If you have an old Solexa/Illumina file
-        with negative Solexa scores, and try and read this as an Illumina 1.3+
-        file it will fail:
-
-        >>> record2 = SeqIO.read("Quality/solexa_faked.fastq", "fastq-illumina")
-        Traceback (most recent call last):
-           ...
-        Bio.SeqIO.QualityIO.InvalidCharError: Invalid character (?) or (0x3f) in quality string not in correct range (are you sure you're using the right QualityIO parser?) with context: [...BA@?>=<...]
-
-        NOTE - True Sanger style FASTQ files use PHRED scores with an offset
-        of 33.
-        """
-        if alphabet is not None:
-            raise ValueError("The alphabet argument is no longer supported")
-        super().__init__(source)
 
 
 class QualPhredIterator(SequenceIterator):
@@ -2522,3 +1755,111 @@ if __name__ == "__main__":
     from Bio._utils import run_doctest
 
     run_doctest(verbose=0)
+
+
+class FastqSangerPyfastxIterator(SequenceIterator):
+    """Parser for Sanger FASTQ files using pyfastx."""
+
+    modes = "t"
+
+    def __init__(self, source, alphabet=None):
+        """Iterate over Fastq records as SeqRecord objects."""
+        if alphabet is not None:
+            raise ValueError("The alphabet argument is no longer supported")
+        try:
+            import pyfastx
+        except ImportError:
+            raise ImportError(
+                "Please install pyfastx to use the pyfastx-based FASTQ parser."
+            ) from None
+        self._iterator = self._create_iterator(source)
+
+    def _create_iterator(self, source):
+        import pyfastx
+        for name, seq, qual, comment in pyfastx.Fastx(source, comment=True):
+            if comment:
+                description = f"{name} {comment}"
+            else:
+                description = name
+            qualities = [ord(c) - 33 for c in qual]
+            yield SeqRecord(
+                Seq(seq),
+                id=name,
+                description=description,
+                letter_annotations={"phred_quality": qualities},
+            )
+
+    def __next__(self):
+        return next(self._iterator)
+
+
+class FastqSolexaPyfastxIterator(SequenceIterator):
+    """Parser for Solexa FASTQ files using pyfastx."""
+
+    modes = "t"
+
+    def __init__(self, source, alphabet=None):
+        """Iterate over Fastq records as SeqRecord objects."""
+        if alphabet is not None:
+            raise ValueError("The alphabet argument is no longer supported")
+        try:
+            import pyfastx
+        except ImportError:
+            raise ImportError(
+                "Please install pyfastx to use the pyfastx-based FASTQ parser."
+            ) from None
+        self._iterator = self._create_iterator(source)
+
+    def _create_iterator(self, source):
+        import pyfastx
+        for name, seq, qual, comment in pyfastx.Fastx(source, comment=True):
+            if comment:
+                description = f"{name} {comment}"
+            else:
+                description = name
+            qualities = [ord(c) - 64 for c in qual]
+            yield SeqRecord(
+                Seq(seq),
+                id=name,
+                description=description,
+                letter_annotations={"solexa_quality": qualities},
+            )
+
+    def __next__(self):
+        return next(self._iterator)
+
+
+class FastqIlluminaPyfastxIterator(SequenceIterator):
+    """Parser for Illumina FASTQ files using pyfastx."""
+
+    modes = "t"
+
+    def __init__(self, source, alphabet=None):
+        """Iterate over Fastq records as SeqRecord objects."""
+        if alphabet is not None:
+            raise ValueError("The alphabet argument is no longer supported")
+        try:
+            import pyfastx
+        except ImportError:
+            raise ImportError(
+                "Please install pyfastx to use the pyfastx-based FASTQ parser."
+            ) from None
+        self._iterator = self._create_iterator(source)
+
+    def _create_iterator(self, source):
+        import pyfastx
+        for name, seq, qual, comment in pyfastx.Fastx(source, comment=True):
+            if comment:
+                description = f"{name} {comment}"
+            else:
+                description = name
+            qualities = [ord(c) - 64 for c in qual]
+            yield SeqRecord(
+                Seq(seq),
+                id=name,
+                description=description,
+                letter_annotations={"phred_quality": qualities},
+            )
+
+    def __next__(self):
+        return next(self._iterator)

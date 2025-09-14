@@ -31,9 +31,9 @@ import struct
 from io import BytesIO
 from io import StringIO
 
-from Bio import SeqIO
 from Bio.File import _IndexedSeqFileProxy
 from Bio.File import _open_for_random_access
+from . import _FormatToIterator, sff, uniprot
 
 
 class SeqFileRandomAccess(_IndexedSeqFileProxy):
@@ -45,7 +45,7 @@ class SeqFileRandomAccess(_IndexedSeqFileProxy):
         self._format = format
         # Load the parser class/function once an avoid the dict lookup in each
         # __getitem__ call:
-        self._iterator = SeqIO._FormatToIterator[format]
+        self._iterator = _FormatToIterator[format]
 
     def get(self, offset):
         """Return SeqRecord."""
@@ -74,7 +74,7 @@ class SffRandomAccess(SeqFileRandomAccess):
             self.number_of_flows_per_read,
             self.flow_chars,
             self.key_sequence,
-        ) = SeqIO.SffIO._sff_file_header(self._handle)
+        ) = sff._sff_file_header(self._handle)
         # Now on to the reads...
         self.read_flow_fmt = ">%iH" % self.number_of_flows_per_read
         self.read_flow_size = struct.calcsize(self.read_flow_fmt)
@@ -92,13 +92,13 @@ class SffRandomAccess(SeqFileRandomAccess):
             self.number_of_flows_per_read,
             self.flow_chars,
             self.key_sequence,
-        ) = SeqIO.SffIO._sff_file_header(handle)
+        ) = sff._sff_file_header(handle)
         if index_offset and index_length:
             # There is an index provided, try this the fast way:
             count = 0
             max_offset = 0
             try:
-                for name, offset in SeqIO.SffIO._sff_read_roche_index(handle):
+                for name, offset in sff._sff_read_roche_index(handle):
                     max_offset = max(max_offset, offset)
                     yield name, offset, 0
                     count += 1
@@ -124,18 +124,18 @@ class SffRandomAccess(SeqFileRandomAccess):
                     # Can have an index at start (or mid-file)
                     handle.seek(max_offset)
                     # Parse the final read,
-                    SeqIO.SffIO._sff_read_raw_record(
+                    sff._sff_read_raw_record(
                         handle, self.number_of_flows_per_read
                     )
                     # Should now be at the end of the file!
                 self._offset = handle.tell()
-                SeqIO.SffIO.SffIterator._check_eof(self, handle)
+                sff.SffIterator._check_eof(self, handle)
                 return
         # We used to give a warning in this case, but Ion Torrent's
         # SFF files don't have an index so that would be annoying.
         # Fall back on the slow way!
         count = 0
-        for name, offset in SeqIO.SffIO._sff_do_slow_index(handle):
+        for name, offset in sff._sff_do_slow_index(handle):
             yield name, offset, 0
             count += 1
         if count != number_of_reads:
@@ -143,7 +143,7 @@ class SffRandomAccess(SeqFileRandomAccess):
                 "Indexed %i records, expected %i" % (count, number_of_reads)
             )
         self._offset = handle.tell()
-        SeqIO.SffIO.SffIterator._check_eof(self, handle)
+        sff.SffIterator._check_eof(self, handle)
 
     def get(self, offset):
         """Return the SeqRecord starting at the given offset."""
@@ -151,14 +151,14 @@ class SffRandomAccess(SeqFileRandomAccess):
         handle.seek(offset)
         self._offset = offset
         self.trim = False
-        return SeqIO.SffIO.SffIterator._sff_read_seq_record(self, handle)
+        return sff.SffIterator._sff_read_seq_record(self, handle)
 
     def get_raw(self, offset):
         """Return the raw record from the file as a bytes string."""
         handle = self._handle
         handle.seek(offset)
         self.stream = handle
-        return SeqIO.SffIO._sff_read_raw_record(handle, self.number_of_flows_per_read)
+        return sff._sff_read_raw_record(handle, self.number_of_flows_per_read)
 
 
 class SffTrimedRandomAccess(SffRandomAccess):
@@ -170,7 +170,7 @@ class SffTrimedRandomAccess(SffRandomAccess):
         handle.seek(offset)
         self._offset = offset
         self.trim = True
-        return SeqIO.SffIO.SffIterator._sff_read_seq_record(self, handle)
+        return sff.SffIterator._sff_read_seq_record(self, handle)
 
 
 ###################
@@ -493,7 +493,7 @@ class UniprotRandomAccess(SequentialSeqFileRandomAccess):
             + self.get_raw(offset)
             + b"</uniprot>"
         )
-        return next(SeqIO.UniprotIO.UniprotIterator(BytesIO(data)))
+        return next(uniprot.UniprotIterator(BytesIO(data)))
 
 
 class IntelliGeneticsRandomAccess(SeqFileRandomAccess):

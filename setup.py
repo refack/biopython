@@ -118,7 +118,7 @@ def can_import(module_name):
 # (and likely will pin specific version numbers), using
 # setup.py's install_requires is preferred for a library
 # (and should try not to be overly narrow with versions).
-REQUIRES = ["numpy"]
+REQUIRES = ["numpy", "pyfastx"]
 
 # --- set up the packages we are going to install
 # standard biopython packages
@@ -203,7 +203,7 @@ EXTENSIONS = [
     Extension("Bio.PDB.ccealign", ["Bio/PDB/ccealignmodule.c"]),
     Extension("Bio.PDB.kdtrees", ["Bio/PDB/kdtrees.c"]),
     Extension("Bio.PDB._bcif_helper", ["Bio/PDB/bcifhelpermodule.c"]),
-    Extension("Bio.SeqIO._twoBitIO", ["Bio/SeqIO/_twoBitIO.c"]),
+    Extension("Bio.io._twoBitIO", ["Bio/io/_twoBitIO.c"]),
 ]
 
 
