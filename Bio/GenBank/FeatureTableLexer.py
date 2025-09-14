@@ -1,4 +1,4 @@
-# Generated from Bio/GenBank/FeatureTable.g4 by ANTLR 4.13.1
+# Generated from FeatureTable.g4 by ANTLR 4.13.1
 from antlr4 import *
 from io import StringIO
 import sys
@@ -78,16 +78,16 @@ class FeatureTableLexer(Lexer):
     modeNames = [ "DEFAULT_MODE" ]
 
     literalNames = [ "<INVALID>",
-            "'.'", "'complement'", "'join'", "'order'", "'pos'", "'aa'", 
+            "'.'", "'complement'", "'join'", "'order'", "'pos'", "'aa'",
             "'seq'", "'('", "')'", "','", "':'", "'..'", "'^'", "'<'", "'>'" ]
 
     symbolicNames = [ "<INVALID>",
-            "COMPLEMENT", "JOIN", "ORDER", "POS", "AA", "SEQ", "LPAREN", 
-            "RPAREN", "COMMA", "COLON", "DOTDOT", "CARET", "LT", "GT", "IDENTIFIER", 
+            "COMPLEMENT", "JOIN", "ORDER", "POS", "AA", "SEQ", "LPAREN",
+            "RPAREN", "COMMA", "COLON", "DOTDOT", "CARET", "LT", "GT", "IDENTIFIER",
             "NUMBER", "WS" ]
 
-    ruleNames = [ "T__0", "COMPLEMENT", "JOIN", "ORDER", "POS", "AA", "SEQ", 
-                  "LPAREN", "RPAREN", "COMMA", "COLON", "DOTDOT", "CARET", 
+    ruleNames = [ "T__0", "COMPLEMENT", "JOIN", "ORDER", "POS", "AA", "SEQ",
+                  "LPAREN", "RPAREN", "COMMA", "COLON", "DOTDOT", "CARET",
                   "LT", "GT", "IDENTIFIER", "NUMBER", "WS" ]
 
     grammarFileName = "FeatureTable.g4"
@@ -98,5 +98,3 @@ class FeatureTableLexer(Lexer):
         self._interp = LexerATNSimulator(self, self.atn, self.decisionsToDFA, PredictionContextCache())
         self._actions = None
         self._predicates = None
-
-

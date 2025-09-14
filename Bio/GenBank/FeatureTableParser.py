@@ -1,4 +1,4 @@
-# Generated from Bio/GenBank/FeatureTable.g4 by ANTLR 4.13.1
+# Generated from FeatureTable.g4 by ANTLR 4.13.1
 # encoding: utf-8
 from antlr4 import *
 from io import StringIO
@@ -51,13 +51,13 @@ class FeatureTableParser ( Parser ):
 
     sharedContextCache = PredictionContextCache()
 
-    literalNames = [ "<INVALID>", "'.'", "'complement'", "'join'", "'order'", 
-                     "'pos'", "'aa'", "'seq'", "'('", "')'", "','", "':'", 
+    literalNames = [ "<INVALID>", "'.'", "'complement'", "'join'", "'order'",
+                     "'pos'", "'aa'", "'seq'", "'('", "')'", "','", "':'",
                      "'..'", "'^'", "'<'", "'>'" ]
 
-    symbolicNames = [ "<INVALID>", "<INVALID>", "COMPLEMENT", "JOIN", "ORDER", 
-                      "POS", "AA", "SEQ", "LPAREN", "RPAREN", "COMMA", "COLON", 
-                      "DOTDOT", "CARET", "LT", "GT", "IDENTIFIER", "NUMBER", 
+    symbolicNames = [ "<INVALID>", "<INVALID>", "COMPLEMENT", "JOIN", "ORDER",
+                      "POS", "AA", "SEQ", "LPAREN", "RPAREN", "COMMA", "COLON",
+                      "DOTDOT", "CARET", "LT", "GT", "IDENTIFIER", "NUMBER",
                       "WS" ]
 
     RULE_location_parse = 0
@@ -72,8 +72,8 @@ class FeatureTableParser ( Parser ):
     RULE_amino_acid = 9
     RULE_sequence = 10
 
-    ruleNames =  [ "location_parse", "anticodon_parse", "location", "location_term", 
-                   "simple_location", "accession", "fuzzy_lt", "fuzzy_gt", 
+    ruleNames =  [ "location_parse", "anticodon_parse", "location", "location_term",
+                   "simple_location", "accession", "fuzzy_lt", "fuzzy_gt",
                    "anticodon_value", "amino_acid", "sequence" ]
 
     EOF = Token.EOF
@@ -863,8 +863,3 @@ class FeatureTableParser ( Parser ):
         finally:
             self.exitRule()
         return localctx
-
-
-
-
-
