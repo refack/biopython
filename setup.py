@@ -26,6 +26,10 @@ http://biopython.org/wiki/Mailing_lists
 import ast
 import os
 import sys
+import subprocess
+import urllib.request
+from setuptools.command.build_py import build_py as _build_py
+
 
 try:
     from setuptools import __version__ as setuptools_version
@@ -63,6 +67,69 @@ if sys.version_info[:2] < MIN_PY_VER:
         + ("Python %d.%d detected.\n" % sys.version_info[:2])
     )
     sys.exit(1)
+
+
+ANTLR_JAR_URL = "https://www.antlr.org/download/antlr-4.13.1-complete.jar"
+ANTLR_JAR_PATH = "antlr-4.13.1-complete.jar"
+
+
+class build_antlr(Command):
+    """Custom command to run ANTLR4."""
+
+    description = "generate parser files from ANTLR4 grammar"
+    user_options = []
+
+    def initialize_options(self):
+        """No-op."""
+        pass
+
+    def finalize_options(self):
+        """No-op."""
+        pass
+
+    def run(self):
+        """Run the command."""
+        if not os.path.exists("Bio/GenBank/FeatureTable.g4"):
+            print("Grammar file not found. Skipping ANTLR build.")
+            return
+
+        if not os.path.exists(ANTLR_JAR_PATH):
+            print(f"Downloading ANTLR jar from {ANTLR_JAR_URL}")
+            try:
+                urllib.request.urlretrieve(ANTLR_JAR_URL, ANTLR_JAR_PATH)
+            except Exception as e:
+                print(f"Error downloading ANTLR jar: {e}")
+                print("Please download it manually and place it in the root directory.")
+                sys.exit(1)
+
+        print("Running ANTLR4")
+        command = [
+            "java",
+            "-jar",
+            ANTLR_JAR_PATH,
+            "-Dlanguage=Python3",
+            "Bio/GenBank/FeatureTable.g4",
+            "-o",
+            "Bio/GenBank",
+            "-visitor",
+            "-package",
+            "Bio.GenBank",
+        ]
+
+        try:
+            subprocess.run(command, check=True)
+        except FileNotFoundError:
+            print("Could not run ANTLR4. Is Java installed and in your PATH?")
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print(f"ANTLR4 failed with exit code {e.returncode}")
+            sys.exit(1)
+
+
+class build_py(_build_py):
+    def run(self):
+        self.run_command('build_antlr')
+        super().run()
 
 
 class test_biopython(Command):
@@ -118,7 +185,7 @@ def can_import(module_name):
 # (and likely will pin specific version numbers), using
 # setup.py's install_requires is preferred for a library
 # (and should try not to be overly narrow with versions).
-REQUIRES = ["numpy"]
+REQUIRES = ["numpy", "antlr4-python3-runtime"]
 
 # --- set up the packages we are going to install
 # standard biopython packages
@@ -260,7 +327,7 @@ setup(
         "Topic :: Scientific/Engineering :: Bio-Informatics",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    cmdclass={"test": test_biopython},
+    cmdclass={"test": test_biopython, "build_antlr": build_antlr, "build_py": build_py},
     packages=PACKAGES,
     ext_modules=EXTENSIONS,
     include_package_data=True,  # done via MANIFEST.in under setuptools
